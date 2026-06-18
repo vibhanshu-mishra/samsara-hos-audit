@@ -1,0 +1,14 @@
+[settings]
+
+# Your Samsara API token (read-only token recommended)
+# Generate at: Samsara Dashboard → Settings → API Tokens
+api_token = YOUR_API_TOKEN_HERE
+
+# Label used in terminal output and saved report filenames
+client_name = Client Name Here
+
+# Drivers who haven't logged in within this many days are skipped
+active_days = 3
+
+# Warn when a driver has used this many hours of their 70-hour weekly limit
+hours_warning = 60

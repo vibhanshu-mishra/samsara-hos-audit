@@ -1,0 +1,12 @@
+# Never commit API tokens or generated reports
+config/settings.ini
+reports/*.csv
+reports/*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
