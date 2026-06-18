@@ -1,6 +1,6 @@
 # Samsara HOS Audit Tool
 
-Daily compliance audit script for Samsara ELD clients. Built for Fleet Regulators internal use.
+Daily compliance audit script for Samsara ELD clients. 
 
 ## What it checks
 
@@ -90,7 +90,3 @@ Each client needs their own Samsara API token. To run the audit for a different 
 ```bash
 python3 audit.py --token CLIENT_B_TOKEN --client "Client B Name"
 ```
-
----
-
-Built by Fleet Regulators
