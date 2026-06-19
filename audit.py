@@ -112,6 +112,25 @@ def get_daily_logs(headers, driver_id, start_ms, end_ms):
         return []
 
 
+def get_dvirs(headers, start_ms, end_ms):
+    """Fetch all pretrip DVIRs for the time window using v1 endpoint."""
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/v1/fleet/maintenance/dvirs",
+            headers=headers,
+            params={
+                "start_ms": start_ms,
+                "end_ms":   end_ms,
+                "inspection_type": "pre"
+            }
+        )
+        if resp.status_code != 200:
+            return []
+        return resp.json().get("dvirs", [])
+    except Exception:
+        return []
+
+
 def get_hos_summary(headers, driver_id):
     try:
         resp = requests.get(
@@ -135,53 +154,47 @@ def ms_to_str(ms):
     return dt.strftime("%Y-%m-%d %I:%M %p")
 
 
-def get_hos_logs_raw(headers, driver_id, start_ms, end_ms):
-    """Fetch raw HOS duty status logs for a driver in a time range."""
+def get_all_hos_clocks(headers):
+    """
+    Fetch current HOS clocks for ALL drivers in one API call.
+    Returns a dict of driver_id -> clock data.
+    The cycleStartedAtTime field tells us when the driver last started
+    a real cycle. Inactive drivers show today's auto-reset time.
+    """
     try:
-        resp = requests.get(
-            f"{BASE_URL}/fleet/hos/logs",
-            headers=headers,
-            params={"driverIds": driver_id, "startMs": start_ms, "endMs": end_ms}
-        )
+        resp = requests.get(f"{BASE_URL}/fleet/hos/clocks", headers=headers)
         if resp.status_code != 200:
-            return []
-        return resp.json().get("data", [])
+            return {}
+        clocks = {}
+        for entry in resp.json().get("data", []):
+            driver_id = entry.get("driver", {}).get("id")
+            if driver_id:
+                clocks[driver_id] = entry
+        return clocks
     except Exception:
-        return []
+        return {}
 
 
-def is_active(headers, driver_id, seven_days_ago_ms, now_ms):
+def is_active_from_clocks(clock_entry, auto_reset_time):
     """
-    A driver is active if ANY status change occurred in the last 7 days.
-    A driver is inactive only if there have been zero status changes
-    for 7 or more days — meaning they are stuck on the same status
-    the entire time with no activity whatsoever.
+    A driver is inactive if their cycleStartedAtTime matches Samsara's
+    auto-reset timestamp (meaning they have done nothing real recently).
+    A driver is active if their cycleStartedAtTime is a real past date
+    different from the auto-reset time.
     """
-    logs = get_hos_logs_raw(headers, driver_id, seven_days_ago_ms, now_ms)
-    if not logs:
+    if not clock_entry:
         return False
-    for entry in logs:
-        # If there are 2 or more hosLogs entries, a status change happened
-        hos_logs = entry.get("hosLogs", [])
-        if len(hos_logs) >= 2:
-            return True
-        # Even 1 log that started within the 7-day window means recent activity
-        for log in hos_logs:
-            start_time = log.get("logStartTime", "")
-            if start_time:
-                from datetime import datetime, timezone
-                try:
-                    start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                    start_ms = int(start_dt.timestamp() * 1000)
-                    if start_ms >= seven_days_ago_ms:
-                        return True
-                except Exception:
-                    pass
-    return False
+    cycle_started = clock_entry.get("clocks", {}).get("cycle", {}).get("cycleStartedAtTime", "")
+    if not cycle_started:
+        return False
+    # If cycle started matches auto-reset time exactly — inactive
+    if cycle_started == auto_reset_time:
+        return False
+    return True
 
 
 # ── Core audit logic ──────────────────────────────────────────────────────────
-def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warning):
+def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warning, dvirs_by_driver):
     driver_id = driver.get("id")
     issues = []
 
@@ -216,7 +229,26 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_wa
                         "detail":   f"Log certified on {log_date} — shipping doc entry is blank"
                     })
 
-    # 3. 70-hour weekly limit warning
+    # 3. DVIR check — did driver submit a pretrip DVIR yesterday?
+    driver_dvirs = dvirs_by_driver.get(str(driver_id), [])
+    if not driver_dvirs:
+        issues.append({
+            "category": "MISSING DVIR",
+            "detail":   "No pretrip DVIR submitted for yesterday"
+        })
+    else:
+        # Check if any DVIR is missing trailer number
+        for dvir in driver_dvirs:
+            trailer_name = dvir.get("trailerName", "").strip()
+            trailer_id   = str(dvir.get("trailerId", "0"))
+            if not trailer_name and (not trailer_id or trailer_id == "0"):
+                issues.append({
+                    "category": "MISSING TRAILER NUMBER",
+                    "detail":   "DVIR submitted but no trailer number recorded"
+                })
+                break
+
+    # 4. 70-hour weekly limit warning
     summary = get_hos_summary(headers, driver_id)
     if summary:
         on_duty_ms    = summary.get("onDutyMs", 0)
@@ -323,8 +355,6 @@ def main():
 
     # Time windows
     now                = datetime.now(tz=timezone.utc)
-    seven_days_ago_ms  = int((now - timedelta(days=7)).timestamp() * 1000)
-    now_ms             = int(now.timestamp() * 1000)
     yesterday_start    = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_end      = yesterday_start + timedelta(days=1)
     yesterday_start_ms = int(yesterday_start.timestamp() * 1000)
@@ -339,19 +369,41 @@ def main():
         sys.exit(1)
 
     print(f"Total drivers in account: {len(all_drivers)}")
-    print("Checking activity (last 7 days)...")
+    print("Fetching HOS clocks...")
+
+    all_clocks = get_all_hos_clocks(headers)
+
+    # Detect Samsara's auto-reset timestamp (used for inactive drivers)
+    # It's the most common cycleStartedAtTime across all drivers
+    from collections import Counter
+    cycle_times = [
+        e.get("clocks", {}).get("cycle", {}).get("cycleStartedAtTime", "")
+        for e in all_clocks.values()
+    ]
+    auto_reset_time = Counter(cycle_times).most_common(1)[0][0] if cycle_times else ""
 
     active_drivers = []
     for d in all_drivers:
-        if is_active(headers, d.get("id"), seven_days_ago_ms, now_ms):
+        driver_id = d.get("id")
+        clock_entry = all_clocks.get(driver_id)
+        if is_active_from_clocks(clock_entry, auto_reset_time):
             active_drivers.append(d)
 
-    print(f"Active drivers (had ON/Driving in last 7 days): {len(active_drivers)}")
+    print(f"Active drivers (real cycle activity): {len(active_drivers)}")
     print(f"Skipped inactive drivers: {len(all_drivers) - len(active_drivers)}")
 
     if not active_drivers:
         print("\n✅ No active drivers found. Nothing to audit.\n")
         sys.exit(0)
+
+    # Fetch all DVIRs for yesterday in one call, index by driverId
+    print("Fetching DVIRs...")
+    raw_dvirs = get_dvirs(headers, yesterday_start_ms, yesterday_end_ms)
+    dvirs_by_driver = {}
+    for dvir in raw_dvirs:
+        did = str(dvir.get("authorSignature", {}).get("driverId", ""))
+        if did:
+            dvirs_by_driver.setdefault(did, []).append(dvir)
 
     # Audit each active driver
     flagged = []
@@ -360,7 +412,7 @@ def main():
     for i, driver in enumerate(active_drivers, 1):
         name = driver.get("name", "Unknown Driver")
         print(f"  Auditing {i}/{len(active_drivers)}: {name}...", end="\r")
-        issues = audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warn)
+        issues = audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warn, dvirs_by_driver)
         if issues:
             flagged.append({"name": name, "id": driver.get("id"), "issues": issues})
         else:
