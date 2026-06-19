@@ -152,22 +152,31 @@ def get_hos_logs_raw(headers, driver_id, start_ms, end_ms):
 
 def is_active(headers, driver_id, seven_days_ago_ms, now_ms):
     """
-    A driver is inactive if their entire last 7 days has been
-    uninterrupted OFF duty or Sleeper Berth — meaning they have had
-    no ON duty or Driving status in the past 7 days.
-    Samsara returns logs nested under hosLogs[], with field hosStatusType.
-    Active statuses: "driving", "onDuty"
-    Inactive statuses: "offDuty", "sleeperBed"
+    A driver is active if ANY status change occurred in the last 7 days.
+    A driver is inactive only if there have been zero status changes
+    for 7 or more days — meaning they are stuck on the same status
+    the entire time with no activity whatsoever.
     """
     logs = get_hos_logs_raw(headers, driver_id, seven_days_ago_ms, now_ms)
     if not logs:
         return False
     for entry in logs:
-        # Each entry has a hosLogs array
-        for log in entry.get("hosLogs", []):
-            status = log.get("hosStatusType", "").lower()
-            if status in ("driving", "onduty"):
-                return True
+        # If there are 2 or more hosLogs entries, a status change happened
+        hos_logs = entry.get("hosLogs", [])
+        if len(hos_logs) >= 2:
+            return True
+        # Even 1 log that started within the 7-day window means recent activity
+        for log in hos_logs:
+            start_time = log.get("logStartTime", "")
+            if start_time:
+                from datetime import datetime, timezone
+                try:
+                    start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                    start_ms = int(start_dt.timestamp() * 1000)
+                    if start_ms >= seven_days_ago_ms:
+                        return True
+                except Exception:
+                    pass
     return False
 
 
