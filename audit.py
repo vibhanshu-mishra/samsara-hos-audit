@@ -155,15 +155,19 @@ def is_active(headers, driver_id, seven_days_ago_ms, now_ms):
     A driver is inactive if their entire last 7 days has been
     uninterrupted OFF duty or Sleeper Berth — meaning they have had
     no ON duty or Driving status in the past 7 days.
+    Samsara returns logs nested under hosLogs[], with field hosStatusType.
+    Active statuses: "driving", "onDuty"
+    Inactive statuses: "offDuty", "sleeperBed"
     """
     logs = get_hos_logs_raw(headers, driver_id, seven_days_ago_ms, now_ms)
     if not logs:
-        # No logs at all in 7 days — definitely inactive
         return False
-    for log in logs:
-        status = log.get("dutyStatus", "").upper()
-        if status in ("ON_DUTY", "DRIVING", "ON", "D"):
-            return True
+    for entry in logs:
+        # Each entry has a hosLogs array
+        for log in entry.get("hosLogs", []):
+            status = log.get("hosStatusType", "").lower()
+            if status in ("driving", "onduty"):
+                return True
     return False
 
 
