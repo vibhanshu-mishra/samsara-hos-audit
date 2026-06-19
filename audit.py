@@ -135,12 +135,36 @@ def ms_to_str(ms):
     return dt.strftime("%Y-%m-%d %I:%M %p")
 
 
-def is_active(driver, cutoff_ms):
-    last_seen = (
-        driver.get("eldSettings", {}).get("lastSeenMs")
-        or driver.get("lastSeen")
-    )
-    return last_seen and last_seen >= cutoff_ms
+def get_hos_logs_raw(headers, driver_id, start_ms, end_ms):
+    """Fetch raw HOS duty status logs for a driver in a time range."""
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/fleet/hos/logs",
+            headers=headers,
+            params={"driverIds": driver_id, "startMs": start_ms, "endMs": end_ms}
+        )
+        if resp.status_code != 200:
+            return []
+        return resp.json().get("data", [])
+    except Exception:
+        return []
+
+
+def is_active(headers, driver_id, seven_days_ago_ms, now_ms):
+    """
+    A driver is inactive if their entire last 7 days has been
+    uninterrupted OFF duty or Sleeper Berth — meaning they have had
+    no ON duty or Driving status in the past 7 days.
+    """
+    logs = get_hos_logs_raw(headers, driver_id, seven_days_ago_ms, now_ms)
+    if not logs:
+        # No logs at all in 7 days — definitely inactive
+        return False
+    for log in logs:
+        status = log.get("dutyStatus", "").upper()
+        if status in ("ON_DUTY", "DRIVING", "ON", "D"):
+            return True
+    return False
 
 
 # ── Core audit logic ──────────────────────────────────────────────────────────
@@ -285,10 +309,11 @@ def main():
     headers      = get_headers(token)
 
     # Time windows
-    now              = datetime.now(tz=timezone.utc)
-    active_cutoff_ms = int((now - timedelta(days=active_days)).timestamp() * 1000)
-    yesterday_start  = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_end    = yesterday_start + timedelta(days=1)
+    now                = datetime.now(tz=timezone.utc)
+    seven_days_ago_ms  = int((now - timedelta(days=7)).timestamp() * 1000)
+    now_ms             = int(now.timestamp() * 1000)
+    yesterday_start    = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_end      = yesterday_start + timedelta(days=1)
     yesterday_start_ms = int(yesterday_start.timestamp() * 1000)
     yesterday_end_ms   = int(yesterday_end.timestamp() * 1000)
 
@@ -300,8 +325,16 @@ def main():
         print(f"\n❌ API error — check your token.\nDetails: {e}\n")
         sys.exit(1)
 
-    active_drivers = [d for d in all_drivers if is_active(d, active_cutoff_ms)]
-    print(f"Total drivers: {len(all_drivers)} | Active (last {active_days}d): {len(active_drivers)}")
+    print(f"Total drivers in account: {len(all_drivers)}")
+    print("Checking activity (last 7 days)...")
+
+    active_drivers = []
+    for d in all_drivers:
+        if is_active(headers, d.get("id"), seven_days_ago_ms, now_ms):
+            active_drivers.append(d)
+
+    print(f"Active drivers (had ON/Driving in last 7 days): {len(active_drivers)}")
+    print(f"Skipped inactive drivers: {len(all_drivers) - len(active_drivers)}")
 
     if not active_drivers:
         print("\n✅ No active drivers found. Nothing to audit.\n")
