@@ -23,6 +23,7 @@ import configparser
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+import zoneinfo
 from pathlib import Path
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -113,16 +114,16 @@ def get_daily_logs(headers, driver_id, start_ms, end_ms):
 
 
 def get_dvirs(headers, start_ms, end_ms):
-    """Fetch all pretrip DVIRs for the time window using v1 endpoint."""
+    """
+    Fetch all DVIRs for yesterday's window.
+    No inspection_type filter — some drivers submit as "Unspecified"
+    instead of "pretrip", so we fetch all types and accept any submission.
+    """
     try:
         resp = requests.get(
             f"{BASE_URL}/v1/fleet/maintenance/dvirs",
             headers=headers,
-            params={
-                "start_ms": start_ms,
-                "end_ms":   end_ms,
-                "inspection_type": "pre"
-            }
+            params={"start_ms": start_ms, "end_ms": end_ms}
         )
         if resp.status_code != 200:
             return []
@@ -150,8 +151,9 @@ def get_hos_summary(headers, driver_id):
 def ms_to_str(ms):
     if not ms:
         return "N/A"
-    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone()
-    return dt.strftime("%Y-%m-%d %I:%M %p")
+    ca_tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+    dt = datetime.fromtimestamp(ms / 1000, tz=ca_tz)
+    return dt.strftime("%Y-%m-%d %I:%M %p PT")
 
 
 def get_all_hos_clocks(headers):
@@ -229,7 +231,7 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_wa
                         "detail":   f"Log certified on {log_date} — shipping doc entry is blank"
                     })
 
-    # 3. DVIR check — did driver submit a pretrip DVIR yesterday?
+    # 3. DVIR check — did driver submit pretrip DVIRs yesterday?
     driver_dvirs = dvirs_by_driver.get(str(driver_id), [])
     if not driver_dvirs:
         issues.append({
@@ -237,16 +239,18 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_wa
             "detail":   "No pretrip DVIR submitted for yesterday"
         })
     else:
-        # Check if any DVIR is missing trailer number
-        for dvir in driver_dvirs:
-            trailer_name = dvir.get("trailerName", "").strip()
-            trailer_id   = str(dvir.get("trailerId", "0"))
-            if not trailer_name and (not trailer_id or trailer_id == "0"):
-                issues.append({
-                    "category": "MISSING TRAILER NUMBER",
-                    "detail":   "DVIR submitted but no trailer number recorded"
-                })
-                break
+        # Check if driver submitted a trailer DVIR (one with trailerName populated)
+        # Each driver should submit two DVIRs: one for vehicle, one for trailer
+        has_trailer_dvir = any(
+            dvir.get("trailerName", "").strip() or
+            str(dvir.get("trailerId", "0")) not in ("0", "")
+            for dvir in driver_dvirs
+        )
+        if not has_trailer_dvir:
+            issues.append({
+                "category": "MISSING TRAILER DVIR",
+                "detail":   "Vehicle DVIR submitted but no trailer DVIR found"
+            })
 
     # 4. 70-hour weekly limit warning
     summary = get_hos_summary(headers, driver_id)
@@ -354,7 +358,9 @@ def main():
     headers      = get_headers(token)
 
     # Time windows
-    now                = datetime.now(tz=timezone.utc)
+    # All times calculated in California time (client's Samsara timezone)
+    ca_tz              = zoneinfo.ZoneInfo("America/Los_Angeles")
+    now                = datetime.now(tz=ca_tz)
     yesterday_start    = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_end      = yesterday_start + timedelta(days=1)
     yesterday_start_ms = int(yesterday_start.timestamp() * 1000)
@@ -396,13 +402,14 @@ def main():
         print("\n✅ No active drivers found. Nothing to audit.\n")
         sys.exit(0)
 
-    # Fetch all DVIRs for yesterday in one call, index by driverId
+    # Fetch all DVIRs for yesterday in one call, index by driverId (as string)
     print("Fetching DVIRs...")
     raw_dvirs = get_dvirs(headers, yesterday_start_ms, yesterday_end_ms)
     dvirs_by_driver = {}
     for dvir in raw_dvirs:
+        # driverId comes back as integer — convert to string to match driver IDs
         did = str(dvir.get("authorSignature", {}).get("driverId", ""))
-        if did:
+        if did and did != "0":
             dvirs_by_driver.setdefault(did, []).append(dvir)
 
     # Audit each active driver
