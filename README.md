@@ -216,7 +216,3 @@ python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
 Reports for each client are saved separately in the `reports/` folder, labelled by client name and date.
-
----
-
-Built by Fleet Regulators
