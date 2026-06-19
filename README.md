@@ -2,7 +2,7 @@
 
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
-The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a clean flagged/clean report — so you only spend time investigating real issues instead of manually clicking through every driver's log.
+The script can be run every morning to pull the previous day's data from Samsara's API, filter out inactive drivers automatically, and produce a clean flagged/clean report, so you only spend time investigating real issues instead of manually clicking through every driver's log.
 
 ---
 
@@ -21,7 +21,7 @@ Even when drivers certify their logs, they sometimes leave the shipping document
 - Certified logs where a shipping document entry exists but the document number is blank
 
 ### 3. Missing DVIR
-Checks whether the driver submitted a pretrip Driver Vehicle Inspection Report for the previous day. Accepts all inspection types (pretrip, unspecified, etc.) since drivers sometimes submit under different type labels.
+Checks whether the driver submitted a pre-trip Driver Vehicle Inspection Report for the previous day. Accepts all inspection types (pretrip, unspecified, etc.) since drivers sometimes submit under different type labels.
 
 ### 4. Missing Trailer DVIR
 Drivers are expected to submit two DVIRs — one for the vehicle and one for the trailer. This check flags drivers who submitted a vehicle DVIR but forgot the trailer DVIR.
@@ -35,7 +35,7 @@ Checks each driver's cumulative on-duty hours across the last 8 days. Flags anyo
 
 Not all drivers in a Samsara account are active at any given time. Fleets often have drivers on leave, between assignments, or no longer active but still in the system. Auditing all of them wastes time and creates noise.
 
-The script determines whether a driver is active by checking their HOS cycle data. Drivers whose cycle clock shows no real activity — meaning Samsara's system auto-reset their cycle rather than them starting a genuine new shift — are automatically skipped. Only drivers with confirmed real activity are included in the audit.
+The script determines whether a driver is active by checking their HOS cycle data. Drivers whose cycle clock shows no real activity — meaning Samsara's system auto-resets their cycle rather than them starting a genuine new shift — are automatically skipped. Only drivers with confirmed real activity are included in the audit.
 
 ---
 
@@ -144,11 +144,11 @@ This is useful when running audits for multiple clients — keep one config file
     [MISSING SHIPPING ID] Log certified on 2026-06-17 — no shipping document ID recorded
 
   DRIVER NAME  (ID: XXXXXXX)
-    [MISSING DVIR] No pretrip DVIR submitted for yesterday
+    [MISSING DVIR] No pre-trip DVIR submitted for yesterday
     [70-HOUR WARNING] 63.5 hrs used in last 8 days — 6.5 hrs remaining
 
   DRIVER NAME  (ID: XXXXXXX)
-    [MISSING TRAILER DVIR] Vehicle DVIR submitted but no trailer DVIR found
+    [MISSING TRAILER DVIR] Vehicle DVIR submitted, but no trailer DVIR found
 
 ✅ CLEAN DRIVERS (12)
 ----------------------------------------------------------------
@@ -215,7 +215,7 @@ Each Samsara account requires its own API token. To run an audit for a different
 python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
-Reports for each client are saved separately in the `reports/` folder, labeled by client name and date.
+Reports for each client are saved separately in the `reports/` folder, labelled by client name and date.
 
 ---
 
