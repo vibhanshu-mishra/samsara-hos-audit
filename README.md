@@ -2,31 +2,32 @@
 
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
-The script can be run every morning to pull the previous day's data from Samsara's API, filter out inactive drivers automatically, and produce a clean flagged/clean report, so you only spend time investigating real issues instead of manually clicking through every driver's log.
+The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a clean flagged/clean report — so you only spend time investigating real issues instead of manually clicking through every driver's log.
 
 ---
 
 ## What it checks
 
 ### 1. HOS Violations
-Pulls any violation that Samsara's system automatically flagged for the previous day. This includes:
+Pulls any violation that Samsara's system flagged for the previous day. This includes:
 - **11-hour driving limit** — driver exceeded maximum daily drive time
 - **14-hour on-duty window** — driver was on duty beyond the 14-hour window from first going on duty
 - **30-minute break violation** — driver drove 8+ cumulative hours without a 30-minute break
-- **Cycle violations** — any weekly hour limit breach
+- **Cycle and shift violations** — any weekly or shift-level hour limit breach
 
-### 2. Missing Shipping Document ID
-Even when drivers certify their logs, they sometimes leave the shipping document ID blank. Samsara does not flag this as a violation on its own. This check catches:
-- Certified logs with no shipping document entry at all
-- Certified logs where a shipping document entry exists but the document number is blank
+### 2. Missing Driver Certification
+Checks whether the driver actually certified (signed off on) their daily log. An uncertified log is a compliance gap even if the hours themselves are fine — it means the driver never confirmed the log was accurate.
 
-### 3. Missing DVIR
-Checks whether the driver submitted a pre-trip Driver Vehicle Inspection Report for the previous day. Accepts all inspection types (pretrip, unspecified, etc.) since drivers sometimes submit under different type labels.
+### 3. Missing Shipping Document ID
+Even when drivers certify their logs, they sometimes leave the shipping document ID blank. Samsara does not flag this as a violation on its own. This check only runs on logs that were certified (an uncertified log is already flagged separately above, so it isn't double-counted).
 
-### 4. Missing Trailer DVIR
+### 4. Missing DVIR
+Checks whether the driver submitted any pretrip Driver Vehicle Inspection Report for the previous day. Accepts all inspection types (pretrip, unspecified, etc.) since drivers sometimes submit under different type labels.
+
+### 5. Missing Trailer DVIR
 Drivers are expected to submit two DVIRs — one for the vehicle and one for the trailer. This check flags drivers who submitted a vehicle DVIR but forgot the trailer DVIR.
 
-### 5. 70-Hour Weekly Limit Warning
+### 6. 70-Hour Weekly Limit Warning
 Checks each driver's cumulative on-duty hours across the last 8 days. Flags anyone at or above the configured warning threshold (default: 60 hours) with how many hours they have remaining before hitting the 70-hour federal limit. This gives dispatchers time to act before a violation occurs.
 
 ---
@@ -35,7 +36,7 @@ Checks each driver's cumulative on-duty hours across the last 8 days. Flags anyo
 
 Not all drivers in a Samsara account are active at any given time. Fleets often have drivers on leave, between assignments, or no longer active but still in the system. Auditing all of them wastes time and creates noise.
 
-The script determines whether a driver is active by checking their HOS cycle data. Drivers whose cycle clock shows no real activity — meaning Samsara's system auto-resets their cycle rather than them starting a genuine new shift — are automatically skipped. Only drivers with confirmed real activity are included in the audit.
+The script determines whether a driver is active by checking their HOS cycle data via a single bulk API call. Samsara auto-resets every driver's cycle clock daily, so a driver whose `cycleStartedAtTime` matches that day's common auto-reset timestamp has had no real activity and is skipped. Drivers with a distinct, real cycle start time — even if they're currently sitting on sleeper berth or off duty — are included in the audit.
 
 ---
 
@@ -102,7 +103,7 @@ The script will:
 2. Pull HOS clock data for all drivers in one API call
 3. Filter out inactive drivers automatically
 4. Fetch all DVIRs for the previous day in one API call
-5. Audit each active driver against all 5 checks
+5. Audit each active driver against all 6 checks
 6. Print a complete flagged/clean report to the terminal
 7. Save a timestamped CSV report to the `reports/` folder
 
@@ -144,11 +145,12 @@ This is useful when running audits for multiple clients — keep one config file
     [MISSING SHIPPING ID] Log certified on 2026-06-17 — no shipping document ID recorded
 
   DRIVER NAME  (ID: XXXXXXX)
-    [MISSING DVIR] No pre-trip DVIR submitted for yesterday
-    [70-HOUR WARNING] 63.5 hrs used in last 8 days — 6.5 hrs remaining
+    [MISSING DRIVER CERTIFICATION] Log for 2026-06-17 was not certified by driver
+    [MISSING DVIR] No pretrip DVIR submitted for yesterday
 
   DRIVER NAME  (ID: XXXXXXX)
-    [MISSING TRAILER DVIR] Vehicle DVIR submitted, but no trailer DVIR found
+    [MISSING TRAILER DVIR] Vehicle DVIR submitted but no trailer DVIR found
+    [70-HOUR WARNING] 63.5 hrs used in last 8 days — 6.5 hrs remaining
 
 ✅ CLEAN DRIVERS (12)
 ----------------------------------------------------------------
@@ -198,6 +200,18 @@ Common options:
 
 ---
 
+## A note on Samsara's API quirks
+
+A few non-obvious things were discovered while building this tool, worth knowing if extending it further:
+
+- The `/fleet/hos/violations` endpoint requires `startTime`/`endTime` as ISO 8601 strings — not `startMs`/`endMs` like most other HOS endpoints. Using the wrong parameter names returns a 200 status with an empty result instead of an error, so this kind of bug can fail silently.
+- The `/fleet/hos/daily-logs` endpoint uses `startMs`/`endMs` correctly, and certification status lives under `logMetaData.isCertified`, with the shipping document field at `logMetaData.shippingDocs` as a plain string — not an array.
+- The `/fleet/hos/clocks` endpoint returns more entries than `/fleet/drivers` does, since it includes drivers no longer in the active roster. This is expected and not a bug.
+- DVIR `driverId` comes back as an integer from the DVIR endpoint but as a string from the drivers endpoint — always cast to string before matching.
+- Drivers submit two separate DVIRs per pretrip inspection: one for the vehicle, one for the trailer. Don't assume a single DVIR record covers both.
+
+---
+
 ## Security
 
 - `config/settings.ini` is listed in `.gitignore` and will never be committed to GitHub
@@ -215,4 +229,4 @@ Each Samsara account requires its own API token. To run an audit for a different
 python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
-Reports for each client are saved separately in the `reports/` folder, labelled by client name and date.
+Reports for each client are saved separately in the `reports/` folder, labeled by client name and date.
