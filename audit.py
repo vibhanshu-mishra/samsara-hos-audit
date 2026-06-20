@@ -85,16 +85,25 @@ def get_all_drivers(headers):
     return paginated_get(f"{BASE_URL}/fleet/drivers", headers)
 
 
-def get_hos_violations(headers, driver_id, start_ms, end_ms):
+def get_hos_violations(headers, driver_id, start_iso, end_iso):
+    """
+    Fetch HOS violations for a driver. This endpoint requires ISO 8601
+    startTime/endTime parameters, NOT startMs/endMs like other HOS endpoints.
+    Response structure is {"data": [{"violations": [...]}]} — violations
+    are nested one level deeper than other endpoints.
+    """
     try:
         resp = requests.get(
             f"{BASE_URL}/fleet/hos/violations",
             headers=headers,
-            params={"driverIds": driver_id, "startMs": start_ms, "endMs": end_ms}
+            params={"driverIds": driver_id, "startTime": start_iso, "endTime": end_iso}
         )
         if resp.status_code != 200:
             return []
-        return resp.json().get("data", [])
+        results = []
+        for entry in resp.json().get("data", []):
+            results.extend(entry.get("violations", []))
+        return results
     except Exception:
         return []
 
@@ -156,6 +165,18 @@ def ms_to_str(ms):
     return dt.strftime("%Y-%m-%d %I:%M %p PT")
 
 
+def ms_to_str_iso(iso_str):
+    """Convert an ISO 8601 timestamp string to readable PT date/time."""
+    if not iso_str:
+        return "N/A"
+    try:
+        ca_tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone(ca_tz)
+        return dt.strftime("%Y-%m-%d %I:%M %p PT")
+    except Exception:
+        return "N/A"
+
+
 def get_all_hos_clocks(headers):
     """
     Fetch current HOS clocks for ALL drivers in one API call.
@@ -196,14 +217,15 @@ def is_active_from_clocks(clock_entry, auto_reset_time):
 
 
 # ── Core audit logic ──────────────────────────────────────────────────────────
-def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warning, dvirs_by_driver):
+def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
+                  yesterday_start_iso, yesterday_end_iso, hours_warning, dvirs_by_driver):
     driver_id = driver.get("id")
     issues = []
 
-    # 1. HOS Violations
-    violations = get_hos_violations(headers, driver_id, yesterday_start_ms, yesterday_end_ms)
+    # 1. HOS Violations (requires ISO startTime/endTime, not ms)
+    violations = get_hos_violations(headers, driver_id, yesterday_start_iso, yesterday_end_iso)
     for v in violations:
-        vtype         = v.get("violationType", "Unknown violation")
+        vtype         = v.get("type", v.get("violationType", "Unknown violation"))
         vtime         = ms_to_str(v.get("startMs"))
         duration_mins = round(v.get("durationMs", 0) / 60000)
         issues.append({
@@ -211,25 +233,27 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_wa
             "detail":   f"{vtype} — started {vtime}, lasted {duration_mins} min"
         })
 
-    # 2. Certified logs with missing shipping document IDs
+    # 2. Daily log certification + shipping document ID
+    # Real fields: isCertified (bool), logMetaData.shippingDocs (string, not array)
     daily_logs = get_daily_logs(headers, driver_id, yesterday_start_ms, yesterday_end_ms)
     for log in daily_logs:
-        if not log.get("certified", False):
-            continue
-        log_date     = ms_to_str(log.get("startMs"))
-        shipping_docs = log.get("shippingDocs", [])
-        if not shipping_docs:
+        log_date = ms_to_str(log.get("startMs")) if log.get("startMs") else ms_to_str_iso(log.get("startTime"))
+        meta = log.get("logMetaData", {})
+        is_certified = meta.get("isCertified", log.get("isCertified", False))
+
+        if not is_certified:
+            issues.append({
+                "category": "MISSING DRIVER CERTIFICATION",
+                "detail":   f"Log for {log_date} was not certified by driver"
+            })
+            continue  # don't double-flag shipping ID if not even certified
+
+        shipping_docs = meta.get("shippingDocs", log.get("shippingDocs", ""))
+        if not shipping_docs or not str(shipping_docs).strip():
             issues.append({
                 "category": "MISSING SHIPPING ID",
                 "detail":   f"Log certified on {log_date} — no shipping document ID recorded"
             })
-        else:
-            for doc in shipping_docs:
-                if not doc.get("documentNumber", "").strip():
-                    issues.append({
-                        "category": "MISSING SHIPPING ID",
-                        "detail":   f"Log certified on {log_date} — shipping doc entry is blank"
-                    })
 
     # 3. DVIR check — did driver submit pretrip DVIRs yesterday?
     driver_dvirs = dvirs_by_driver.get(str(driver_id), [])
@@ -363,8 +387,10 @@ def main():
     now                = datetime.now(tz=ca_tz)
     yesterday_start    = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_end      = yesterday_start + timedelta(days=1)
-    yesterday_start_ms = int(yesterday_start.timestamp() * 1000)
-    yesterday_end_ms   = int(yesterday_end.timestamp() * 1000)
+    yesterday_start_ms  = int(yesterday_start.timestamp() * 1000)
+    yesterday_end_ms    = int(yesterday_end.timestamp() * 1000)
+    yesterday_start_iso = yesterday_start.isoformat()
+    yesterday_end_iso   = yesterday_end.isoformat()
 
     # Fetch & filter drivers
     print(f"\nConnecting to Samsara ({client_name})...")
@@ -419,7 +445,8 @@ def main():
     for i, driver in enumerate(active_drivers, 1):
         name = driver.get("name", "Unknown Driver")
         print(f"  Auditing {i}/{len(active_drivers)}: {name}...", end="\r")
-        issues = audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms, hours_warn, dvirs_by_driver)
+        issues = audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
+                               yesterday_start_iso, yesterday_end_iso, hours_warn, dvirs_by_driver)
         if issues:
             flagged.append({"name": name, "id": driver.get("id"), "issues": issues})
         else:
