@@ -15,8 +15,8 @@ Pulls any violation that Samsara's system flagged for the previous day. This inc
 - **30-minute break violation** — driver drove 8+ cumulative hours without a 30-minute break
 - **Cycle and shift violations** — any weekly or shift-level hour limit breach
 
-### 2. Missing Driver Certification
-Checks whether the driver actually certified (signed off on) their daily log. An uncertified log is a compliance gap even if the hours themselves are fine — it means the driver never confirmed the log was accurate.
+### 2. HOS - Missing Driver Certification
+Checks whether the driver actually certified (signed off on) their daily log. An uncertified log is a compliance gap even if the hours themselves are fine — it means the driver never confirmed the log was accurate. This check catches the issue from two sources — Samsara's violations endpoint (which surfaces it as `unsubmittedLogs`) and the daily-logs endpoint (which exposes the `isCertified` field directly). If both flag the same driver, it only appears once in the report.
 
 ### 3. Missing Shipping Document ID
 Even when drivers certify their logs, they sometimes leave the shipping document ID blank. Samsara does not flag this as a violation on its own. This check only runs on logs that were certified (an uncertified log is already flagged separately above, so it isn't double-counted).
@@ -145,7 +145,7 @@ This is useful when running audits for multiple clients — keep one config file
     [MISSING SHIPPING ID] Log certified on 2026-06-17 — no shipping document ID recorded
 
   DRIVER NAME  (ID: XXXXXXX)
-    [MISSING DRIVER CERTIFICATION] Log for 2026-06-17 was not certified by driver
+    [HOS - MISSING DRIVER CERTIFICATION] Log for 2026-06-17 was not certified by driver
     [MISSING DVIR] No pretrip DVIR submitted for yesterday
 
   DRIVER NAME  (ID: XXXXXXX)
@@ -177,7 +177,7 @@ A CSV file is saved to the `reports/` folder on every run, named with the client
 | driver | Driver full name |
 | driver_id | Samsara driver ID |
 | status | FLAGGED or CLEAN |
-| category | Issue type (HOS VIOLATION, MISSING DVIR, etc.) |
+| category | Issue type (HOS VIOLATION, HOS - MISSING DRIVER CERTIFICATION, MISSING DVIR, etc.) |
 | detail | Full description of the issue |
 
 Clean drivers appear as a single row with blank category and detail columns.
@@ -230,3 +230,7 @@ python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
 Reports for each client are saved separately in the `reports/` folder, labeled by client name and date.
+
+---
+
+Built by Fleet Regulators
