@@ -6,8 +6,15 @@ Fleet Regulators — Daily compliance audit for Samsara ELD clients.
 
 Checks active drivers for:
   1. HOS violations flagged by Samsara
-  2. Certified logs with missing shipping document IDs
-  3. Drivers approaching 70-hour weekly limit (configurable threshold)
+  2. Missing driver log certification
+  3. Certified logs with missing shipping document IDs
+  4. Missing vehicle/trailer DVIRs
+  5. Drivers approaching 70-hour weekly limit (configurable threshold)
+
+Uses a 3-tier report system:
+  CRITICAL = actual HOS violations
+  WARNING  = issues requiring safety team follow-up
+  PENDING  = likely driver action later, such as certification while still off duty/sleeper
 
 Usage:
   python3 audit.py                        # Uses config/settings.ini
@@ -216,10 +223,80 @@ def is_active_from_clocks(clock_entry, auto_reset_time):
     return True
 
 
+def find_first_key(obj, possible_keys):
+    """
+    Recursively search a Samsara response for the first matching key.
+    This makes the script more tolerant if Samsara nests duty status slightly
+    differently across accounts or API versions.
+    """
+    if isinstance(obj, dict):
+        for key in possible_keys:
+            if key in obj and obj[key] not in (None, ""):
+                return obj[key]
+        for value in obj.values():
+            found = find_first_key(value, possible_keys)
+            if found not in (None, ""):
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = find_first_key(item, possible_keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def get_current_duty_status(clock_entry):
+    """
+    Pull the driver's current duty status from the HOS clock response.
+    Common Samsara values include offDuty, sleeperBerth, driving, and onDuty.
+    """
+    status = find_first_key(clock_entry, [
+        "currentDutyStatus",
+        "dutyStatus",
+        "hosStatusType",
+        "status",
+        "type",
+    ])
+    return str(status or "unknown")
+
+
+def normalize_duty_status(status):
+    cleaned = str(status or "unknown").replace("_", "").replace("-", "").replace(" ", "").lower()
+
+    if cleaned in ("offduty", "off"):
+        return "offDuty"
+    if cleaned in ("sleeperberth", "sleeper"):
+        return "sleeperBerth"
+    if cleaned in ("driving", "drive"):
+        return "driving"
+    if cleaned in ("onduty", "ondutynotdriving", "notdriving"):
+        return "onDuty"
+    return status or "unknown"
+
+
+def is_pending_certification_status(status):
+    """
+    If the driver is still Off Duty or Sleeper Berth at audit time, missing
+    certification is treated as PENDING instead of WARNING.
+    """
+    normalized = normalize_duty_status(status)
+    return normalized in ("offDuty", "sleeperBerth")
+
+
+def make_issue(severity, category, detail):
+    return {
+        "severity": severity,
+        "category": category,
+        "detail": detail,
+    }
+
+
 # ── Core audit logic ──────────────────────────────────────────────────────────
 def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
-                  yesterday_start_iso, yesterday_end_iso, hours_warning, dvirs_by_driver):
+                  yesterday_start_iso, yesterday_end_iso, hours_warning,
+                  dvirs_by_driver, clock_entry):
     driver_id = driver.get("id")
+    current_duty_status = normalize_duty_status(get_current_duty_status(clock_entry))
     issues = []
 
     # 1. HOS Violations (requires ISO startTime/endTime, not ms)
@@ -237,10 +314,7 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
             detail = f"{vtype} — started {ms_to_str(start_ms)}, lasted {duration_mins} min"
         else:
             detail = f"{vtype} — lasted {duration_mins} min"
-        issues.append({
-            "category": "HOS VIOLATION",
-            "detail":   detail
-        })
+        issues.append(make_issue("CRITICAL", "HOS VIOLATION", detail))
 
     # 2. Daily log certification + shipping document ID
     # Real fields: isCertified (bool), logMetaData.shippingDocs (string, not array)
@@ -249,10 +323,9 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
     # If unsubmittedLogs violation came through but daily-logs returned nothing, still flag it
     if has_unsubmitted_logs_violation and not daily_logs:
         if not any(i["category"] == "HOS - MISSING DRIVER CERTIFICATION" for i in issues):
-            issues.append({
-                "category": "HOS - MISSING DRIVER CERTIFICATION",
-                "detail":   "Driver has unsubmitted logs for yesterday"
-            })
+            severity = "PENDING" if is_pending_certification_status(current_duty_status) else "WARNING"
+            detail = f"Driver has unsubmitted logs for yesterday — current status: {current_duty_status}"
+            issues.append(make_issue(severity, "HOS - MISSING DRIVER CERTIFICATION", detail))
 
     for log in daily_logs:
         log_date = ms_to_str(log.get("startMs")) if log.get("startMs") else ms_to_str_iso(log.get("startTime"))
@@ -262,26 +335,23 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
         if not is_certified or has_unsubmitted_logs_violation:
             # Only add once — unsubmittedLogs violation and isCertified=false are the same issue
             if not any(i["category"] == "HOS - MISSING DRIVER CERTIFICATION" for i in issues):
-                issues.append({
-                    "category": "HOS - MISSING DRIVER CERTIFICATION",
-                    "detail":   f"Log for {log_date} was not certified by driver"
-                })
+                severity = "PENDING" if is_pending_certification_status(current_duty_status) else "WARNING"
+                detail = f"Log for {log_date} was not certified by driver — current status: {current_duty_status}"
+                issues.append(make_issue(severity, "HOS - MISSING DRIVER CERTIFICATION", detail))
             continue  # don't double-flag shipping ID if not even certified
 
         shipping_docs = meta.get("shippingDocs", log.get("shippingDocs", ""))
         if not shipping_docs or not str(shipping_docs).strip():
-            issues.append({
-                "category": "MISSING SHIPPING ID",
-                "detail":   f"Log certified on {log_date} — no shipping document ID recorded"
-            })
+            issues.append(make_issue(
+                "WARNING",
+                "MISSING SHIPPING ID",
+                f"Log certified on {log_date} — no shipping document ID recorded"
+            ))
 
     # 3. DVIR check — did driver submit pretrip DVIRs yesterday?
     driver_dvirs = dvirs_by_driver.get(str(driver_id), [])
     if not driver_dvirs:
-        issues.append({
-            "category": "MISSING DVIR",
-            "detail":   "No pretrip DVIR submitted for yesterday"
-        })
+        issues.append(make_issue("WARNING", "MISSING DVIR", "No pretrip DVIR submitted for yesterday"))
     else:
         # Check if driver submitted a trailer DVIR (one with trailerName populated)
         # Each driver should submit two DVIRs: one for vehicle, one for trailer
@@ -291,10 +361,11 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
             for dvir in driver_dvirs
         )
         if not has_trailer_dvir:
-            issues.append({
-                "category": "MISSING TRAILER DVIR",
-                "detail":   "Vehicle DVIR submitted but no trailer DVIR found"
-            })
+            issues.append(make_issue(
+                "WARNING",
+                "MISSING TRAILER DVIR",
+                "Vehicle DVIR submitted but no trailer DVIR found"
+            ))
 
     # 4. 70-hour weekly limit warning
     summary = get_hos_summary(headers, driver_id)
@@ -303,29 +374,51 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
         on_duty_hours = round(on_duty_ms / 3600000, 1)
         if on_duty_hours >= hours_warning:
             remaining = max(round(70 - on_duty_hours, 1), 0)
-            issues.append({
-                "category": "70-HOUR WARNING",
-                "detail":   f"{on_duty_hours} hrs used in last 8 days — {remaining} hrs remaining"
-            })
+            issues.append(make_issue(
+                "WARNING",
+                "70-HOUR WARNING",
+                f"{on_duty_hours} hrs used in last 8 days — {remaining} hrs remaining"
+            ))
 
     return issues
 
 
 # ── Report writers ────────────────────────────────────────────────────────────
+def drivers_with_severity(flagged, severity):
+    """Return drivers who have at least one issue at the selected severity."""
+    selected = []
+    for driver in flagged:
+        issues = [i for i in driver["issues"] if i.get("severity") == severity]
+        if issues:
+            selected.append({**driver, "issues": issues})
+    return selected
+
+
+def print_issue_section(title, drivers):
+    print(f"\n{title} ({len(drivers)})")
+    print("-" * 62)
+    if not drivers:
+        print("  None")
+        return
+    for d in drivers:
+        print(f"\n  {d['name']}  (ID: {d['id']})")
+        for issue in d["issues"]:
+            print(f"    [{issue['category']}] {issue['detail']}")
+
+
 def print_report(flagged, clean, total_active, run_time, client_name):
+    critical = drivers_with_severity(flagged, "CRITICAL")
+    warning = drivers_with_severity(flagged, "WARNING")
+    pending = drivers_with_severity(flagged, "PENDING")
+
     print("\n" + "=" * 62)
     print(f"  {client_name.upper()} — SAMSARA HOS AUDIT")
     print(f"  {run_time.strftime('%Y-%m-%d %I:%M %p')}")
     print("=" * 62)
 
-    print(f"\n🚨 FLAGGED DRIVERS ({len(flagged)})")
-    print("-" * 62)
-    if not flagged:
-        print("  None — all active drivers are clean.")
-    for d in flagged:
-        print(f"\n  {d['name']}  (ID: {d['id']})")
-        for issue in d["issues"]:
-            print(f"    [{issue['category']}] {issue['detail']}")
+    print_issue_section("🚨 CRITICAL — ACTION REQUIRED", critical)
+    print_issue_section("⚠️  WARNING — SAFETY FOLLOW-UP", warning)
+    print_issue_section("🟡 PENDING — CHECK LATER", pending)
 
     print(f"\n✅ CLEAN DRIVERS ({len(clean)})")
     print("-" * 62)
@@ -334,7 +427,9 @@ def print_report(flagged, clean, total_active, run_time, client_name):
 
     print(f"\n{'=' * 62}")
     print(f"  Active drivers audited : {total_active}")
-    print(f"  Flagged                : {len(flagged)}")
+    print(f"  Critical drivers       : {len(critical)}")
+    print(f"  Warning drivers        : {len(warning)}")
+    print(f"  Pending drivers        : {len(pending)}")
     print(f"  Clean                  : {len(clean)}")
     print("=" * 62 + "\n")
 
@@ -351,7 +446,7 @@ def save_csv(flagged, clean, run_time, client_name):
                 "client":     client_name,
                 "driver":     d["name"],
                 "driver_id":  d["id"],
-                "status":     "FLAGGED",
+                "status":     issue.get("severity", "FLAGGED"),
                 "category":   issue["category"],
                 "detail":     issue["detail"],
             })
@@ -465,8 +560,10 @@ def main():
     for i, driver in enumerate(active_drivers, 1):
         name = driver.get("name", "Unknown Driver")
         print(f"  Auditing {i}/{len(active_drivers)}: {name}...", end="\r")
+        clock_entry = all_clocks.get(driver.get("id"))
         issues = audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
-                               yesterday_start_iso, yesterday_end_iso, hours_warn, dvirs_by_driver)
+                               yesterday_start_iso, yesterday_end_iso, hours_warn,
+                               dvirs_by_driver, clock_entry)
         if issues:
             flagged.append({"name": name, "id": driver.get("id"), "issues": issues})
         else:
