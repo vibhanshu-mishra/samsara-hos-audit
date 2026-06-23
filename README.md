@@ -32,6 +32,67 @@ Checks each driver's cumulative on-duty hours across the last 8 days. Flags anyo
 
 ---
 
+## Issue Severity Levels
+
+The audit categorizes findings into three severity levels to help compliance teams prioritize their work.
+
+### 🚨 Critical
+
+Issues requiring immediate attention.
+
+Examples:
+- 11-hour driving limit violations
+- 14-hour on-duty violations
+- 30-minute break violations
+- Cycle violations
+- Any HOS violation returned by Samsara
+
+### ⚠️ Warning
+
+Compliance issues that should be addressed but are not immediate HOS violations.
+
+Examples:
+- Missing shipping document ID
+- Missing DVIR
+- Missing trailer DVIR
+- Drivers approaching the 70-hour limit
+- Uncertified logs where the driver has already started today's shift
+
+### 🟡 Pending
+
+Issues that may resolve naturally and typically do not require immediate intervention.
+
+Examples:
+- Uncertified logs where the driver is still Off Duty or in a sleeper berth and has not yet started their current workday.
+
+These drivers should be monitored and rechecked later in the day before escalating.
+
+---
+
+## Driver Certification Logic
+
+The audit distinguishes between drivers who have not certified a log because they have not started their day and drivers who are actively working with uncertified logs.
+
+Examples:
+
+Driver sleeping at 8:00 AM:
+- Yesterday's log is uncertified
+- Current status: Sleeper Berth
+
+Result:
+🟡 Pending
+
+The driver starts driving at 9:30 AM:
+- Yesterday's log is still uncertified
+- Current status: Driving
+
+Result:
+⚠️ Warning
+
+This reduces false positives and helps compliance teams focus on drivers who require intervention.
+
+---
+
 ## Active driver filter
 
 Not all drivers in a Samsara account are active at any given time. Fleets often have drivers on leave, between assignments, or no longer active but still in the system. Auditing all of them wastes time and creates noise.
@@ -40,15 +101,31 @@ The script determines whether a driver is active by checking their HOS cycle dat
 
 ---
 
-## What still requires human review
+## Why Pending Certifications Are Not Immediately Flagged
 
-The script handles mechanical checks well, but some compliance issues require judgment that automation cannot reliably provide:
+Many drivers certify logs after completing their required rest period and before beginning their next shift.
 
-- **Sleeper berth split validity** — verifying the 7-hour + 2-hour split rule was followed correctly
-- **Personal Conveyance abuse** — PC logged for unreasonably long distances
-- **Yard Move abuse** — Yard Move covering distances inconsistent with on-site movement
-- **Log edit history** — drivers editing logs after the fact (a major red flag in DOT audits)
-- **Edge cases and carrier workarounds** — patterns that appear compliant on paper but aren't
+Flagging every uncertified log early in the morning creates unnecessary noise and can result in compliance teams chasing issues that would have resolved naturally.
+
+The Pending category exists to identify logs that require monitoring rather than immediate action.
+
+---
+
+## Compliance Checks Not Yet Automated
+
+The audit automates mechanical compliance checks well, but some areas still require human review or additional development.
+
+Current examples include:
+
+- Sleeper berth split validation (7/3, 8/2, etc.)
+- Personal Conveyance abuse detection
+- Yard Move abuse detection
+- Log edit history monitoring
+- Detection of suspicious driver behavior patterns
+- Trend analysis across multiple days
+- Driver compliance scoring
+
+These checks involve contextual judgment or historical analysis and are planned for future versions of the tool.
 
 ---
 
@@ -230,3 +307,4 @@ python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
 Reports for each client are saved separately in the `reports/` folder, labeled by client name and date.
+
