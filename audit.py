@@ -224,28 +224,48 @@ def audit_driver(headers, driver, yesterday_start_ms, yesterday_end_ms,
 
     # 1. HOS Violations (requires ISO startTime/endTime, not ms)
     violations = get_hos_violations(headers, driver_id, yesterday_start_iso, yesterday_end_iso)
+    has_unsubmitted_logs_violation = False
     for v in violations:
-        vtype         = v.get("type", v.get("violationType", "Unknown violation"))
-        vtime         = ms_to_str(v.get("startMs"))
+        vtype = v.get("type", v.get("violationType", "Unknown violation"))
+        # unsubmittedLogs is handled separately as MISSING DRIVER CERTIFICATION
+        if vtype == "unsubmittedLogs":
+            has_unsubmitted_logs_violation = True
+            continue
+        start_ms      = v.get("startMs")
         duration_mins = round(v.get("durationMs", 0) / 60000)
+        if start_ms:
+            detail = f"{vtype} — started {ms_to_str(start_ms)}, lasted {duration_mins} min"
+        else:
+            detail = f"{vtype} — lasted {duration_mins} min"
         issues.append({
             "category": "HOS VIOLATION",
-            "detail":   f"{vtype} — started {vtime}, lasted {duration_mins} min"
+            "detail":   detail
         })
 
     # 2. Daily log certification + shipping document ID
     # Real fields: isCertified (bool), logMetaData.shippingDocs (string, not array)
     daily_logs = get_daily_logs(headers, driver_id, yesterday_start_ms, yesterday_end_ms)
+
+    # If unsubmittedLogs violation came through but daily-logs returned nothing, still flag it
+    if has_unsubmitted_logs_violation and not daily_logs:
+        if not any(i["category"] == "HOS - MISSING DRIVER CERTIFICATION" for i in issues):
+            issues.append({
+                "category": "HOS - MISSING DRIVER CERTIFICATION",
+                "detail":   "Driver has unsubmitted logs for yesterday"
+            })
+
     for log in daily_logs:
         log_date = ms_to_str(log.get("startMs")) if log.get("startMs") else ms_to_str_iso(log.get("startTime"))
         meta = log.get("logMetaData", {})
         is_certified = meta.get("isCertified", log.get("isCertified", False))
 
-        if not is_certified:
-            issues.append({
-                "category": "MISSING DRIVER CERTIFICATION",
-                "detail":   f"Log for {log_date} was not certified by driver"
-            })
+        if not is_certified or has_unsubmitted_logs_violation:
+            # Only add once — unsubmittedLogs violation and isCertified=false are the same issue
+            if not any(i["category"] == "HOS - MISSING DRIVER CERTIFICATION" for i in issues):
+                issues.append({
+                    "category": "HOS - MISSING DRIVER CERTIFICATION",
+                    "detail":   f"Log for {log_date} was not certified by driver"
+                })
             continue  # don't double-flag shipping ID if not even certified
 
         shipping_docs = meta.get("shippingDocs", log.get("shippingDocs", ""))
