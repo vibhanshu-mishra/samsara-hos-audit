@@ -2,7 +2,18 @@
 
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
-The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a clean flagged/clean report — so you only spend time investigating real issues instead of manually clicking through every driver's log.
+The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a prioritised compliance report grouped into Critical, Warning, Pending, and Clean categories so safety teams can focus on the issues that require action first.
+
+---
+
+## Features
+
+- Automatically audits yesterday's Samsara HOS activity
+- Uses Samsara HOS cycle clocks to automatically exclude inactive drivers
+- Categorises findings into Critical, Warning, Pending, and Clean
+- Detects HOS violations, uncertified logs, missing shipping IDs, missing DVIRs, missing trailer DVIRs, and 70-hour warnings
+- Generates human-readable terminal and CSV reports
+- Read-only access — never modifies Samsara data
 
 ---
 
@@ -97,7 +108,7 @@ This reduces false positives and helps compliance teams focus on drivers who req
 
 Not all drivers in a Samsara account are active at any given time. Fleets often have drivers on leave, between assignments, or no longer active but still in the system. Auditing all of them wastes time and creates noise.
 
-The script determines whether a driver is active by checking their HOS cycle data via a single bulk API call. Samsara auto-resets every driver's cycle clock daily, so a driver whose `cycleStartedAtTime` matches that day's common auto-reset timestamp has had no real activity and is skipped. Drivers with a distinct, real cycle start time — even if they're currently sitting on sleeper berth or off duty — are included in the audit.
+The script determines whether a driver is active by analysing HOS cycle clock data rather than relying on driver lists or recent log activity. This approach automatically excludes inactive drivers while still including drivers who are currently resting but have an active cycle, significantly reducing false positives and unnecessary compliance reviews. Samsara auto-resets every driver's cycle clock daily, so a driver whose `cycleStartedAtTime` matches that day's common auto-reset timestamp has had no real activity and is skipped. Drivers with a distinct, real cycle start time — even if they're currently sitting on a sleeper berth or off duty — are included in the audit.
 
 ---
 
@@ -118,7 +129,7 @@ The audit automates mechanical compliance checks well, but some areas still requ
 Current examples include:
 
 - Sleeper berth split validation (7/3, 8/2, etc.)
-- Personal Conveyance abuse detection
+- Personal Conveyance Abuse Detection
 - Yard Move abuse detection
 - Log edit history monitoring
 - Detection of suspicious driver behavior patterns
@@ -126,6 +137,21 @@ Current examples include:
 - Driver compliance scoring
 
 These checks involve contextual judgment or historical analysis and are planned for future versions of the tool.
+
+---
+
+## Audit Workflow
+
+Every run follows the same process:
+
+1. Fetch all drivers
+2. Fetch HOS clocks
+3. Filter inactive drivers
+4. Fetch DVIRs
+5. Audit each active driver
+6. Categorise findings by severity
+7. Generate terminal output
+8. Export CSV report
 
 ---
 
@@ -307,4 +333,12 @@ python3 audit.py --token CLIENT_TOKEN --client "Client Fleet Name"
 ```
 
 Reports for each client are saved separately in the `reports/` folder, labeled by client name and date.
+
+---
+
+## Disclaimer
+
+This tool assists compliance teams by automating routine mechanical checks against Samsara data.
+
+It does not replace a qualified safety professional or DOT compliance review. Certain compliance determinations require operational context and human judgment.
 
