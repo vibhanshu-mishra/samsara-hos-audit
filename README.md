@@ -6,12 +6,22 @@ The script runs every morning, pulls the previous day's data from Samsara's API,
 
 ---
 
+## Design Philosophy
+
+The goal of this tool is not simply to detect every possible compliance issue.
+
+Its primary objective is to reduce the amount of manual review required by safety teams by automatically identifying operationally meaningful compliance issues while minimising false positives.
+
+The audit intentionally separates Critical, Warning, Pending, and Clean findings so compliance teams can prioritise work based on urgency rather than reviewing every driver equally.
+
+---
+
 ## Features
 
 - Automatically audits yesterday's Samsara HOS activity
 - Uses Samsara HOS cycle clocks to automatically exclude inactive drivers
 - Categorises findings into Critical, Warning, Pending, and Clean
-- Detects HOS violations, uncertified logs, missing shipping IDs, missing DVIRs, missing trailer DVIRs, and 70-hour warnings
+- Detects and prioritises compliance issues, including HOS violations, uncertified logs, missing shipping IDs, missing DVIRs, missing trailer DVIRs, and 70-hour warnings.
 - Generates human-readable terminal and CSV reports
 - Read-only access — never modifies Samsara data
 
@@ -45,7 +55,7 @@ Checks each driver's cumulative on-duty hours across the last 8 days. Flags anyo
 
 ## Issue Severity Levels
 
-The audit categorizes findings into three severity levels to help compliance teams prioritize their work.
+The audit categorises findings into three severity levels to help compliance teams prioritise their work.
 
 ### 🚨 Critical
 
@@ -144,14 +154,14 @@ These checks involve contextual judgment or historical analysis and are planned 
 
 Every run follows the same process:
 
-1. Fetch all drivers
-2. Fetch HOS clocks
-3. Filter inactive drivers
-4. Fetch DVIRs
-5. Audit each active driver
-6. Categorise findings by severity
-7. Generate terminal output
-8. Export CSV report
+1. Retrieve all drivers from Samsara
+2. Retrieve current HOS cycle clocks
+3. Automatically exclude inactive drivers
+4. Retrieve previous day's DVIRs
+5. Audit each active driver for compliance issues
+6. Classify findings into Critical, Warning, Pending, or Clean
+7. Generate a human-readable terminal report
+8. Export a timestamped CSV report
 
 ---
 
@@ -236,38 +246,40 @@ This is useful when running audits for multiple clients — keep one config file
 ### Terminal output
 ```
 ================================================================
-  FLEET NAME — SAMSARA HOS AUDIT
+  FLEET NAME — SAMSARA HOS COMPLIANCE AUDIT
   2026-06-17 08:30 AM PT
 ================================================================
 
-🚨 FLAGGED DRIVERS (3)
+🚨 CRITICAL (1)
 ----------------------------------------------------------------
 
-  DRIVER NAME  (ID: XXXXXXX)
-    [HOS VIOLATION] 14HourDriving — started 2026-06-17 06:00 AM PT, lasted 45 min
-    [MISSING SHIPPING ID] Log certified on 2026-06-17 — no shipping document ID recorded
+  John Smith
+    [HOS VIOLATION] 14HourDriving — started ...
 
-  DRIVER NAME  (ID: XXXXXXX)
-    [HOS - MISSING DRIVER CERTIFICATION] Log for 2026-06-17 was not certified by driver
-    [MISSING DVIR] No pretrip DVIR submitted for yesterday
-
-  DRIVER NAME  (ID: XXXXXXX)
-    [MISSING TRAILER DVIR] Vehicle DVIR submitted but no trailer DVIR found
-    [70-HOUR WARNING] 63.5 hrs used in last 8 days — 6.5 hrs remaining
-
-✅ CLEAN DRIVERS (12)
+⚠️ WARNING (2)
 ----------------------------------------------------------------
+
+  Jane Doe
+    [MISSING SHIPPING ID] ...
+
+  Bob Jones
+    [MISSING DVIR] ...
+
+🟡 PENDING (1)
+----------------------------------------------------------------
+
+  Gurukarj Singh
+    [MISSING DRIVER CERTIFICATION]
+    Driver is currently in the Sleeper Berth and has not yet started today's shift.
+
+✅ CLEAN (12)
+----------------------------------------------------------------
+
   Driver Name
   Driver Name
-  ...
 
 ================================================================
-  Active drivers audited : 15
-  Flagged                : 3
-  Clean                  : 12
-================================================================
 
-  📄 Report saved: Fleet_Name_2026-06-17_0830.csv
 ```
 
 ### CSV report
