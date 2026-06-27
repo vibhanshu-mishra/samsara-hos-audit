@@ -27,6 +27,14 @@ The audit intentionally separates Critical, Warning, Pending, and Clean findings
 
 ---
 
+> **Status**
+>
+> ✅ Actively maintained.
+>
+> This tool is used internally by Fleet Regulators to perform daily compliance audits for Samsara fleets and continues to evolve based on real operational use.
+
+---
+
 ## What it checks
 
 ### 1. HOS Violations
@@ -353,4 +361,14 @@ Reports for each client are saved separately in the `reports/` folder, labeled b
 This tool assists compliance teams by automating routine mechanical checks against Samsara data.
 
 It does not replace a qualified safety professional or DOT compliance review. Certain compliance determinations require operational context and human judgment.
+
+---
+
+## Future Direction
+
+This repository contains the standalone command-line version of the audit tool.
+
+I am actively expanding this project into a broader compliance platform with additional automation, reporting, analytics, and managed compliance capabilities.
+
+If your fleet is interested in advanced compliance automation or managed safety services, feel free to reach out on [LinkedIn](https://www.linkedin.com/in/vibhanshu9/) 
 
