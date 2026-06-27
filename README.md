@@ -1,5 +1,9 @@
 # Samsara HOS Compliance Audit Tool 
 
+> **Version:** v1.0.0
+>
+> **Status:** Actively maintained
+
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
 The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a prioritised compliance report grouped into Critical, Warning, Pending, and Clean categories so safety teams can focus on the issues that require action first.
@@ -24,14 +28,6 @@ The audit intentionally separates Critical, Warning, Pending, and Clean findings
 - Detects and prioritises compliance issues, including HOS violations, uncertified logs, missing shipping IDs, missing DVIRs, missing trailer DVIRs, and 70-hour warnings.
 - Generates human-readable terminal and CSV reports
 - Read-only access — never modifies Samsara data
-
----
-
-> **Status**
->
-> ✅ Actively maintained.
->
-> This tool is used internally by Fleet Regulators to perform daily compliance audits for Samsara fleets and continues to evolve based on real operational use.
 
 ---
 
