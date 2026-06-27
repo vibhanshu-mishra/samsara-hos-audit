@@ -2,11 +2,11 @@
 
 > **Version:** v1.0.0
 >
-> **Status:** Actively maintained
+> ✅ **Status:** Actively maintained
 
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
-The script runs every morning, pulls the previous day's data from Samsara's API, filters out inactive drivers automatically, and produces a prioritised compliance report grouped into Critical, Warning, Pending, and Clean categories so safety teams can focus on the issues that require action first.
+The script runs every morning, pulls the previous day's data from Samsara's API, automatically filters out inactive drivers, and produces a prioritised compliance report grouped into Critical, Warning, Pending, and Clean categories, so safety teams can focus on the issues that require action first.
 
 ---
 
