@@ -1,4 +1,4 @@
-# Samsara HOS Compliance Audit Tool
+# Samsara HOS Compliance Audit Tool (Community Edition)
 
 A daily automated compliance audit script for Samsara ELD fleets. Built for internal use by trucking safety consultants and compliance teams.
 
